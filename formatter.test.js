@@ -1,63 +1,89 @@
 "use strict";
 
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { formatText } = require("./formatter");
 
-test("replaces inline shorthand pairs with backticks", () => {
-  const result = formatText("this is ;;abc;; and ;;def;; or ;; and else");
-  assert.equal(result.output, "this is `abc` and `def` or ;; and else");
-});
+const CASE_DIR = path.join(__dirname, "case");
+const CASE_FILE_PATTERN = /^case-.*\.md$/;
 
-test("leaves unmatched shorthand untouched", () => {
-  const result = formatText("before ;; still open");
-  assert.equal(result.output, "before ;; still open");
-});
+for (const fileName of getCaseFiles()) {
+  const filePath = path.join(CASE_DIR, fileName);
+  const { title, input, expected } = parseCaseFile(fs.readFileSync(filePath, "utf8"), fileName);
 
-test("wraps ;;+ content to end of line in backticks", () => {
-  const result = formatText("this is ;;+ hehehe ;;kjsdfk;;klsdjfie");
-  assert.equal(result.output, "this is ` hehehe ;;kjsdfk;;klsdjfie`");
-});
+  test(title, () => {
+    const result = formatText(input);
+    assert.equal(result.output, expected);
+  });
+}
 
-test("replaces shorthand outside existing inline code only", () => {
-  const result = formatText("keep `;;code;;` but change ;;text;;");
-  assert.equal(result.output, "keep `;;code;;` but change `text`");
-});
+function getCaseFiles() {
+  return fs
+    .readdirSync(CASE_DIR)
+    .filter((fileName) => CASE_FILE_PATTERN.test(fileName))
+    .sort();
+}
 
-test("applies ;;+ before inline replacements on the same line", () => {
-  const result = formatText("prefix ;;+ hello ;;name;;");
-  assert.equal(result.output, "prefix ` hello ;;name;;`");
-});
+function parseCaseFile(content, fileName) {
+  const titleMatch = content.match(/^#\s+(.+)$/m);
+  const input = extractSectionBlock(content, "输入", fileName);
+  const expected = extractSectionBlock(content, "预期输出", fileName);
 
-test("normalizes heading spacing", () => {
-  const result = formatText("#Heading");
-  assert.equal(result.output, "# Heading");
-});
+  return {
+    title: titleMatch?.[1] ?? fileName,
+    input,
+    expected,
+  };
+}
 
-test("normalizes unordered list spacing and trailing spaces", () => {
-  const result = formatText("-item");
-  assert.equal(result.output, "- item  ");
-});
+function extractSectionBlock(content, heading, fileName) {
+  const lines = content.split("\n");
+  const headingLine = `## ${heading}`;
+  const startIndex = lines.findIndex((line) => line.trim() === headingLine);
 
-test("normalizes ordered list spacing and trailing spaces", () => {
-  const result = formatText("1.item");
-  assert.equal(result.output, "1. item  ");
-});
+  if (startIndex === -1) {
+    throw new Error(`Missing section "${heading}" in ${fileName}`);
+  }
 
-test("preserves fenced code block contents", () => {
-  const input = ["```js", "#Heading", "-item", "const x = ';;abc;;';", "```"].join("\n");
-  const result = formatText(input);
-  assert.equal(result.output, input);
-});
+  let endIndex = lines.length;
+  for (let index = startIndex + 1; index < lines.length; index += 1) {
+    if (lines[index].startsWith("## ")) {
+      endIndex = index;
+      break;
+    }
+  }
 
-test("reports changed lines", () => {
-  const result = formatText("#Heading\nplain");
-  assert.deepEqual(result.changes, [
-    {
-      line: 1,
-      before: "#Heading",
-      after: "# Heading",
-    },
-  ]);
-});
+  const sectionLines = lines.slice(startIndex + 1, endIndex);
+  return extractFencedBlock(sectionLines, heading, fileName);
+}
+
+function extractFencedBlock(lines, heading, fileName) {
+  let openIndex = -1;
+  let fenceMarker = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^(\s*)(`{3,}|~{3,})/);
+    if (!match) {
+      continue;
+    }
+
+    openIndex = index;
+    fenceMarker = match[2];
+    break;
+  }
+
+  if (openIndex === -1 || !fenceMarker) {
+    throw new Error(`Missing fenced code block in section "${heading}" of ${fileName}`);
+  }
+
+  for (let index = openIndex + 1; index < lines.length; index += 1) {
+    if (lines[index].trim() === fenceMarker) {
+      return lines.slice(openIndex + 1, index).join("\n");
+    }
+  }
+
+  throw new Error(`Missing closing fence in section "${heading}" of ${fileName}`);
+}

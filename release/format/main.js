@@ -6,9 +6,7 @@ const MENU_TITLE = "Custom Format";
 const PREVIEW_LIMIT = 8;
 const CODE_FENCE_PATTERN = /^(\s*)(```|~~~)/;
 const HEADING_PATTERN = /^(\s{0,3})(#{1,6})(\S.*)$/;
-const UNORDERED_LIST_PATTERN = /^(\s*)([-*+])(\S.*)$/;
 const ORDERED_LIST_PATTERN = /^(\s*)(\d+\.)(\S.*)$/;
-const LIST_ITEM_PATTERN = /^(\s*)(?:[-*+]|\d+\.)\s+(.*)$/;
 
 class FormatPreviewModal extends Modal {
   constructor(app, file, before, formatResult) {
@@ -344,9 +342,11 @@ function formatText(input) {
 function formatMarkdownLine(line) {
   let nextLine = applyLineShorthand(line);
   nextLine = replaceInlineBacktickShorthand(nextLine);
-  nextLine = normalizeHeadingSpacing(nextLine);
-  nextLine = normalizeListMarkerSpacing(nextLine);
-  nextLine = normalizeListTrailingSpaces(nextLine);
+  const parsedLine = parseMarkdownLine(nextLine);
+
+  nextLine = normalizeHeadingSpacing(nextLine, parsedLine);
+  nextLine = normalizeListMarkerSpacing(nextLine, parsedLine);
+  nextLine = normalizeListTrailingSpaces(nextLine, parsedLine);
 
   return nextLine;
 }
@@ -362,26 +362,82 @@ function applyLineShorthand(line) {
   return `${prefix}\`${content}\``;
 }
 
-function normalizeHeadingSpacing(line) {
-  return line.replace(HEADING_PATTERN, (_, indent, hashes, text) => {
-    return `${indent}${hashes} ${text.trimStart()}`;
-  });
+function parseMarkdownLine(line) {
+  const headingMatch = line.match(HEADING_PATTERN);
+  if (headingMatch) {
+    return {
+      kind: "heading",
+      indent: headingMatch[1],
+      marker: headingMatch[2],
+      content: headingMatch[3],
+    };
+  }
+
+  const orderedListMatch = line.match(ORDERED_LIST_PATTERN);
+  if (orderedListMatch) {
+    return {
+      kind: "ordered-list",
+      indent: orderedListMatch[1],
+      marker: orderedListMatch[2],
+      content: orderedListMatch[3],
+    };
+  }
+
+  const unorderedListMatch = parseUnorderedListLine(line);
+  if (unorderedListMatch) {
+    return unorderedListMatch;
+  }
+
+  return {
+    kind: "text",
+    content: line,
+  };
 }
 
-function normalizeListMarkerSpacing(line) {
-  let nextLine = line.replace(UNORDERED_LIST_PATTERN, (_, indent, marker, text) => {
-    return `${indent}${marker} ${text.trimStart()}`;
-  });
+function parseUnorderedListLine(line) {
+  const match = line.match(/^(\s*)([-*+])(.*)$/);
+  if (!match) {
+    return null;
+  }
 
-  nextLine = nextLine.replace(ORDERED_LIST_PATTERN, (_, indent, marker, text) => {
-    return `${indent}${marker} ${text.trimStart()}`;
-  });
+  const indent = match[1];
+  const marker = match[2];
+  const content = match[3];
 
-  return nextLine;
+  if (marker === "*" && content.startsWith("*")) {
+    return null;
+  }
+
+  if (content.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: "unordered-list",
+    indent,
+    marker,
+    content,
+  };
 }
 
-function normalizeListTrailingSpaces(line) {
-  if (!LIST_ITEM_PATTERN.test(line)) {
+function normalizeHeadingSpacing(line, parsedLine) {
+  if (parsedLine.kind !== "heading") {
+    return line;
+  }
+
+  return `${parsedLine.indent}${parsedLine.marker} ${parsedLine.content.trimStart()}`;
+}
+
+function normalizeListMarkerSpacing(line, parsedLine) {
+  if (parsedLine.kind === "unordered-list" || parsedLine.kind === "ordered-list") {
+    return `${parsedLine.indent}${parsedLine.marker} ${parsedLine.content.trimStart()}`;
+  }
+
+  return line;
+}
+
+function normalizeListTrailingSpaces(line, parsedLine) {
+  if (parsedLine.kind !== "unordered-list" && parsedLine.kind !== "ordered-list") {
     return line;
   }
 
