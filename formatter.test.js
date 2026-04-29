@@ -14,8 +14,8 @@ for (const fileName of getCaseFiles()) {
   const filePath = path.join(CASE_DIR, fileName);
   const { title, input, expected } = parseCaseFile(fs.readFileSync(filePath, "utf8"), fileName);
 
-  test(title, () => {
-    const result = formatText(input);
+  test(title, async () => {
+    const result = await formatText(input);
     assert.equal(result.output, expected);
   });
 }
@@ -50,7 +50,8 @@ function extractSectionBlock(content, heading, fileName) {
 
   let endIndex = lines.length;
   for (let index = startIndex + 1; index < lines.length; index += 1) {
-    if (lines[index].startsWith("## ")) {
+    const candidate = lines[index].trim();
+    if (candidate === "## 输入" || candidate === "## 预期输出") {
       endIndex = index;
       break;
     }

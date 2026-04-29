@@ -4,6 +4,15 @@
   "private": true,
   "description": "Obsidian plugin implementing custom Markdown formatting rules.",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "build:release": "node scripts/build-release.js"
+  },
+  "dependencies": {
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
   }
 }

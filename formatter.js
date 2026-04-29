@@ -1,39 +1,57 @@
 "use strict";
 
-const CODE_FENCE_PATTERN = /^(\s*)(```|~~~)/;
-const HEADING_PATTERN = /^(\s{0,3})(#{1,6})(\S.*)$/;
-const ORDERED_LIST_PATTERN = /^(\s*)(\d+\.)(\S.*)$/;
+let markdownToolsPromise = null;
 
-function formatText(input) {
+async function loadMarkdownTools() {
+  if (!markdownToolsPromise) {
+    markdownToolsPromise = Promise.all([
+      import("unified"),
+      import("remark-parse"),
+      import("unist-util-visit"),
+    ]).then(([unifiedModule, remarkParseModule, visitModule]) => {
+      return {
+        processor: unifiedModule.unified().use(remarkParseModule.default),
+        visit: visitModule.visit,
+      };
+    });
+  }
+
+  return markdownToolsPromise;
+}
+
+async function formatText(input) {
+  const { processor, visit } = await loadMarkdownTools();
+  const tree = processor.parse(input);
+  const plan = buildFormattingPlan(tree, visit);
   const lines = input.split("\n");
   const outputLines = [];
-  let inCodeFence = false;
-  let activeFence = null;
 
-  for (const line of lines) {
-    const fenceMatch = line.match(CODE_FENCE_PATTERN);
+  for (let index = 0; index < lines.length; index += 1) {
+    const lineNumber = index + 1;
+    const line = lines[index];
 
-    if (fenceMatch) {
-      const fenceToken = fenceMatch[2];
-
-      if (!inCodeFence) {
-        inCodeFence = true;
-        activeFence = fenceToken;
-      } else if (fenceToken === activeFence) {
-        inCodeFence = false;
-        activeFence = null;
-      }
-
+    if (plan.codeLineNumbers.has(lineNumber)) {
       outputLines.push(line);
       continue;
     }
 
-    if (inCodeFence) {
-      outputLines.push(line);
-      continue;
+    let nextLine = applyLineShorthand(line);
+    nextLine = replaceInlineBacktickShorthand(nextLine);
+
+    if (plan.headingDepthByLine.has(lineNumber)) {
+      nextLine = normalizeHeadingLine(nextLine, plan.headingDepthByLine.get(lineNumber));
+    } else {
+      nextLine = normalizeHeadingFallbackLine(nextLine);
     }
 
-    outputLines.push(formatMarkdownLine(line));
+    const listItemInfo = plan.listItemsByLine.get(lineNumber);
+    if (listItemInfo) {
+      nextLine = normalizeListItemLine(nextLine, listItemInfo);
+    } else {
+      nextLine = normalizeListFallbackLine(nextLine);
+    }
+
+    outputLines.push(nextLine);
   }
 
   const output = outputLines.join("\n");
@@ -44,16 +62,48 @@ function formatText(input) {
   };
 }
 
-function formatMarkdownLine(line) {
-  let nextLine = applyLineShorthand(line);
-  nextLine = replaceInlineBacktickShorthand(nextLine);
-  const parsedLine = parseMarkdownLine(nextLine);
+function buildFormattingPlan(tree, visit) {
+  const codeLineNumbers = new Set();
+  const headingDepthByLine = new Map();
+  const listItemsByLine = new Map();
 
-  nextLine = normalizeHeadingSpacing(nextLine, parsedLine);
-  nextLine = normalizeListMarkerSpacing(nextLine, parsedLine);
-  nextLine = normalizeListTrailingSpaces(nextLine, parsedLine);
+  visit(tree, "code", (node) => {
+    if (!node.position) {
+      return;
+    }
 
-  return nextLine;
+    addLineRange(codeLineNumbers, node.position.start.line, node.position.end.line);
+  });
+
+  visit(tree, "heading", (node) => {
+    if (!node.position) {
+      return;
+    }
+
+    headingDepthByLine.set(node.position.start.line, node.depth);
+  });
+
+  visit(tree, "listItem", (node, index, parent) => {
+    if (!node.position || parent?.type !== "list") {
+      return;
+    }
+
+    listItemsByLine.set(node.position.start.line, {
+      ordered: Boolean(parent.ordered),
+    });
+  });
+
+  return {
+    codeLineNumbers,
+    headingDepthByLine,
+    listItemsByLine,
+  };
+}
+
+function addLineRange(set, startLine, endLine) {
+  for (let line = startLine; line <= endLine; line += 1) {
+    set.add(line);
+  }
 }
 
 function applyLineShorthand(line) {
@@ -65,116 +115,6 @@ function applyLineShorthand(line) {
   const prefix = line.slice(0, markerIndex);
   const content = line.slice(markerIndex + 3);
   return `${prefix}\`${content}\``;
-}
-
-function parseMarkdownLine(line) {
-  const headingMatch = line.match(HEADING_PATTERN);
-  if (headingMatch) {
-    return {
-      kind: "heading",
-      indent: headingMatch[1],
-      marker: headingMatch[2],
-      content: headingMatch[3],
-    };
-  }
-
-  const orderedListMatch = line.match(ORDERED_LIST_PATTERN);
-  if (orderedListMatch) {
-    return {
-      kind: "ordered-list",
-      indent: orderedListMatch[1],
-      marker: orderedListMatch[2],
-      content: orderedListMatch[3],
-    };
-  }
-
-  const unorderedListMatch = parseUnorderedListLine(line);
-  if (unorderedListMatch) {
-    return unorderedListMatch;
-  }
-
-  return {
-    kind: "text",
-    content: line,
-  };
-}
-
-function parseUnorderedListLine(line) {
-  const match = line.match(/^(\s*)([-*+])(.*)$/);
-  if (!match) {
-    return null;
-  }
-
-  const indent = match[1];
-  const marker = match[2];
-  const content = match[3];
-
-  if (marker === "*" && content.startsWith("*")) {
-    return null;
-  }
-
-  if (content.length === 0) {
-    return null;
-  }
-
-  return {
-    kind: "unordered-list",
-    indent,
-    marker,
-    content,
-  };
-}
-
-function normalizeHeadingSpacing(line, parsedLine) {
-  if (parsedLine.kind !== "heading") {
-    return line;
-  }
-
-  return `${parsedLine.indent}${parsedLine.marker} ${parsedLine.content.trimStart()}`;
-}
-
-function normalizeListMarkerSpacing(line, parsedLine) {
-  if (parsedLine.kind === "unordered-list" || parsedLine.kind === "ordered-list") {
-    return `${parsedLine.indent}${parsedLine.marker} ${parsedLine.content.trimStart()}`;
-  }
-
-  return line;
-}
-
-function normalizeListTrailingSpaces(line, parsedLine) {
-  if (parsedLine.kind !== "unordered-list" && parsedLine.kind !== "ordered-list") {
-    return line;
-  }
-
-  return line.replace(/[ \t]*$/, "  ");
-}
-
-function summarizeChanges(before, after) {
-  if (before === after) {
-    return [];
-  }
-
-  const beforeLines = before.split("\n");
-  const afterLines = after.split("\n");
-  const maxLength = Math.max(beforeLines.length, afterLines.length);
-  const changes = [];
-
-  for (let index = 0; index < maxLength; index += 1) {
-    const beforeLine = beforeLines[index] ?? "";
-    const afterLine = afterLines[index] ?? "";
-
-    if (beforeLine === afterLine) {
-      continue;
-    }
-
-    changes.push({
-      line: index + 1,
-      before: beforeLine,
-      after: afterLine,
-    });
-  }
-
-  return changes;
 }
 
 function replaceInlineBacktickShorthand(line) {
@@ -207,8 +147,124 @@ function replaceInlineBacktickShorthand(line) {
   return result;
 }
 
+function normalizeHeadingLine(line, depth) {
+  const match = line.match(/^(\s{0,3})(#{1,6})(\s*)(.*)$/);
+  if (!match) {
+    return line;
+  }
+
+  const indent = match[1];
+  const content = match[4];
+  if (content.trim().length === 0) {
+    return line;
+  }
+
+  return `${indent}${"#".repeat(depth)} ${content.trimStart()}`;
+}
+
+function normalizeHeadingFallbackLine(line) {
+  const match = line.match(/^(\s{0,3})(#{1,6})(\S.*)$/);
+  if (!match) {
+    return line;
+  }
+
+  const indent = match[1];
+  const marker = match[2];
+  const content = match[3];
+  if (content.trim().length === 0) {
+    return line;
+  }
+
+  return `${indent}${marker} ${content.trimStart()}`;
+}
+
+function normalizeListItemLine(line, listItemInfo) {
+  if (listItemInfo.ordered) {
+    const match = line.match(/^(\s*)(\d+)([.)])(\s*)(.*)$/);
+    if (!match) {
+      return line;
+    }
+
+    const indent = match[1];
+    const marker = `${match[2]}${match[3]}`;
+    const content = match[5];
+    if (content.trim().length === 0) {
+      return line;
+    }
+
+    return `${indent}${marker} ${content.trimStart()}`.replace(/[ \t]*$/, "  ");
+  }
+
+  const match = line.match(/^(\s*)([-*+])(\s*)(.*)$/);
+  if (!match) {
+    return line;
+  }
+
+  const indent = match[1];
+  const marker = match[2];
+  const content = match[4];
+  if (content.trim().length === 0) {
+    return line;
+  }
+
+  return `${indent}${marker} ${content.trimStart()}`.replace(/[ \t]*$/, "  ");
+}
+
+function normalizeListFallbackLine(line) {
+  const orderedMatch = line.match(/^(\s*)(\d+\.)(\S.*)$/);
+  if (orderedMatch) {
+    return `${orderedMatch[1]}${orderedMatch[2]} ${orderedMatch[3].trimStart()}`.replace(/[ \t]*$/, "  ");
+  }
+
+  const unorderedMatch = line.match(/^(\s*)([-*+])(.*)$/);
+  if (!unorderedMatch) {
+    return line;
+  }
+
+  const indent = unorderedMatch[1];
+  const marker = unorderedMatch[2];
+  const content = unorderedMatch[3];
+
+  if (content.length === 0) {
+    return line;
+  }
+
+  if (content[0] === marker || /^\s/.test(content)) {
+    return line;
+  }
+
+  return `${indent}${marker} ${content.trimStart()}`.replace(/[ \t]*$/, "  ");
+}
+
+function summarizeChanges(before, after) {
+  if (before === after) {
+    return [];
+  }
+
+  const beforeLines = before.split("\n");
+  const afterLines = after.split("\n");
+  const maxLength = Math.max(beforeLines.length, afterLines.length);
+  const changes = [];
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const beforeLine = beforeLines[index] ?? "";
+    const afterLine = afterLines[index] ?? "";
+
+    if (beforeLine === afterLine) {
+      continue;
+    }
+
+    changes.push({
+      line: index + 1,
+      before: beforeLine,
+      after: afterLine,
+    });
+  }
+
+  return changes;
+}
+
 module.exports = {
   formatText,
-  formatMarkdownLine,
   summarizeChanges,
 };

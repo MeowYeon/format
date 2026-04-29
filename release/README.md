@@ -6,8 +6,10 @@ Copy the contents of `release/format/` into your vault at:
 .obsidian/plugins/format/
 ```
 
-The runtime files are:
+The bundled runtime files are:
 
 - `manifest.json`
 - `main.js`
 - `styles.css`
+
+`main.js` is produced by `npm run build:release` and includes the formatter logic plus third-party dependencies.
