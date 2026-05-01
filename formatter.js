@@ -38,17 +38,9 @@ async function formatText(input) {
     let nextLine = applyLineShorthand(line);
     nextLine = replaceInlineBacktickShorthand(nextLine);
 
-    if (plan.headingDepthByLine.has(lineNumber)) {
-      nextLine = normalizeHeadingLine(nextLine, plan.headingDepthByLine.get(lineNumber));
-    } else {
-      nextLine = normalizeHeadingFallbackLine(nextLine);
-    }
-
     const listItemInfo = plan.listItemsByLine.get(lineNumber);
     if (listItemInfo) {
       nextLine = normalizeListItemLine(nextLine, listItemInfo);
-    } else {
-      nextLine = normalizeListFallbackLine(nextLine);
     }
 
     outputLines.push(nextLine);
@@ -64,7 +56,6 @@ async function formatText(input) {
 
 function buildFormattingPlan(tree, visit) {
   const codeLineNumbers = new Set();
-  const headingDepthByLine = new Map();
   const listItemsByLine = new Map();
 
   visit(tree, "code", (node) => {
@@ -73,14 +64,6 @@ function buildFormattingPlan(tree, visit) {
     }
 
     addLineRange(codeLineNumbers, node.position.start.line, node.position.end.line);
-  });
-
-  visit(tree, "heading", (node) => {
-    if (!node.position) {
-      return;
-    }
-
-    headingDepthByLine.set(node.position.start.line, node.depth);
   });
 
   visit(tree, "listItem", (node, index, parent) => {
@@ -95,7 +78,6 @@ function buildFormattingPlan(tree, visit) {
 
   return {
     codeLineNumbers,
-    headingDepthByLine,
     listItemsByLine,
   };
 }
@@ -147,37 +129,6 @@ function replaceInlineBacktickShorthand(line) {
   return result;
 }
 
-function normalizeHeadingLine(line, depth) {
-  const match = line.match(/^(\s{0,3})(#{1,6})(\s*)(.*)$/);
-  if (!match) {
-    return line;
-  }
-
-  const indent = match[1];
-  const content = match[4];
-  if (content.trim().length === 0) {
-    return line;
-  }
-
-  return `${indent}${"#".repeat(depth)} ${content.trimStart()}`;
-}
-
-function normalizeHeadingFallbackLine(line) {
-  const match = line.match(/^(\s{0,3})(#{1,6})(\S.*)$/);
-  if (!match) {
-    return line;
-  }
-
-  const indent = match[1];
-  const marker = match[2];
-  const content = match[3];
-  if (content.trim().length === 0) {
-    return line;
-  }
-
-  return `${indent}${marker} ${content.trimStart()}`;
-}
-
 function normalizeListItemLine(line, listItemInfo) {
   if (listItemInfo.ordered) {
     const match = line.match(/^(\s*)(\d+)([.)])(\s*)(.*)$/);
@@ -204,32 +155,6 @@ function normalizeListItemLine(line, listItemInfo) {
   const marker = match[2];
   const content = match[4];
   if (content.trim().length === 0) {
-    return line;
-  }
-
-  return `${indent}${marker} ${content.trimStart()}`.replace(/[ \t]*$/, "  ");
-}
-
-function normalizeListFallbackLine(line) {
-  const orderedMatch = line.match(/^(\s*)(\d+\.)(\S.*)$/);
-  if (orderedMatch) {
-    return `${orderedMatch[1]}${orderedMatch[2]} ${orderedMatch[3].trimStart()}`.replace(/[ \t]*$/, "  ");
-  }
-
-  const unorderedMatch = line.match(/^(\s*)([-*+])(.*)$/);
-  if (!unorderedMatch) {
-    return line;
-  }
-
-  const indent = unorderedMatch[1];
-  const marker = unorderedMatch[2];
-  const content = unorderedMatch[3];
-
-  if (content.length === 0) {
-    return line;
-  }
-
-  if (content[0] === marker || /^\s/.test(content)) {
     return line;
   }
 

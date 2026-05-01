@@ -10,9 +10,9 @@ const { formatText } = require("./formatter");
 const CASE_DIR = path.join(__dirname, "case");
 const CASE_FILE_PATTERN = /^case-.*\.md$/;
 
-for (const fileName of getCaseFiles()) {
-  const filePath = path.join(CASE_DIR, fileName);
-  const { title, input, expected } = parseCaseFile(fs.readFileSync(filePath, "utf8"), fileName);
+for (const filePath of getCaseFiles(CASE_DIR)) {
+  const caseName = path.relative(CASE_DIR, filePath);
+  const { title, input, expected } = parseCaseFile(fs.readFileSync(filePath, "utf8"), caseName);
 
   test(title, async () => {
     const result = await formatText(input);
@@ -20,10 +20,21 @@ for (const fileName of getCaseFiles()) {
   });
 }
 
-function getCaseFiles() {
+function getCaseFiles(directory) {
   return fs
-    .readdirSync(CASE_DIR)
-    .filter((fileName) => CASE_FILE_PATTERN.test(fileName))
+    .readdirSync(directory, { withFileTypes: true })
+    .flatMap((entry) => {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        return getCaseFiles(entryPath);
+      }
+
+      if (entry.isFile() && CASE_FILE_PATTERN.test(entry.name)) {
+        return [entryPath];
+      }
+
+      return [];
+    })
     .sort();
 }
 

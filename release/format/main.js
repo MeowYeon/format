@@ -9247,16 +9247,9 @@ var require_formatter = __commonJS({
         }
         let nextLine = applyLineShorthand(line);
         nextLine = replaceInlineBacktickShorthand(nextLine);
-        if (plan.headingDepthByLine.has(lineNumber)) {
-          nextLine = normalizeHeadingLine(nextLine, plan.headingDepthByLine.get(lineNumber));
-        } else {
-          nextLine = normalizeHeadingFallbackLine(nextLine);
-        }
         const listItemInfo = plan.listItemsByLine.get(lineNumber);
         if (listItemInfo) {
           nextLine = normalizeListItemLine(nextLine, listItemInfo);
-        } else {
-          nextLine = normalizeListFallbackLine(nextLine);
         }
         outputLines.push(nextLine);
       }
@@ -9268,19 +9261,12 @@ var require_formatter = __commonJS({
     }
     function buildFormattingPlan(tree, visit2) {
       const codeLineNumbers = /* @__PURE__ */ new Set();
-      const headingDepthByLine = /* @__PURE__ */ new Map();
       const listItemsByLine = /* @__PURE__ */ new Map();
       visit2(tree, "code", (node2) => {
         if (!node2.position) {
           return;
         }
         addLineRange(codeLineNumbers, node2.position.start.line, node2.position.end.line);
-      });
-      visit2(tree, "heading", (node2) => {
-        if (!node2.position) {
-          return;
-        }
-        headingDepthByLine.set(node2.position.start.line, node2.depth);
       });
       visit2(tree, "listItem", (node2, index2, parent) => {
         if (!node2.position || parent?.type !== "list") {
@@ -9292,7 +9278,6 @@ var require_formatter = __commonJS({
       });
       return {
         codeLineNumbers,
-        headingDepthByLine,
         listItemsByLine
       };
     }
@@ -9335,31 +9320,6 @@ var require_formatter = __commonJS({
       }
       return result;
     }
-    function normalizeHeadingLine(line, depth) {
-      const match = line.match(/^(\s{0,3})(#{1,6})(\s*)(.*)$/);
-      if (!match) {
-        return line;
-      }
-      const indent = match[1];
-      const content3 = match[4];
-      if (content3.trim().length === 0) {
-        return line;
-      }
-      return `${indent}${"#".repeat(depth)} ${content3.trimStart()}`;
-    }
-    function normalizeHeadingFallbackLine(line) {
-      const match = line.match(/^(\s{0,3})(#{1,6})(\S.*)$/);
-      if (!match) {
-        return line;
-      }
-      const indent = match[1];
-      const marker = match[2];
-      const content3 = match[3];
-      if (content3.trim().length === 0) {
-        return line;
-      }
-      return `${indent}${marker} ${content3.trimStart()}`;
-    }
     function normalizeListItemLine(line, listItemInfo) {
       if (listItemInfo.ordered) {
         const match2 = line.match(/^(\s*)(\d+)([.)])(\s*)(.*)$/);
@@ -9382,26 +9342,6 @@ var require_formatter = __commonJS({
       const marker = match[2];
       const content3 = match[4];
       if (content3.trim().length === 0) {
-        return line;
-      }
-      return `${indent}${marker} ${content3.trimStart()}`.replace(/[ \t]*$/, "  ");
-    }
-    function normalizeListFallbackLine(line) {
-      const orderedMatch = line.match(/^(\s*)(\d+\.)(\S.*)$/);
-      if (orderedMatch) {
-        return `${orderedMatch[1]}${orderedMatch[2]} ${orderedMatch[3].trimStart()}`.replace(/[ \t]*$/, "  ");
-      }
-      const unorderedMatch = line.match(/^(\s*)([-*+])(.*)$/);
-      if (!unorderedMatch) {
-        return line;
-      }
-      const indent = unorderedMatch[1];
-      const marker = unorderedMatch[2];
-      const content3 = unorderedMatch[3];
-      if (content3.length === 0) {
-        return line;
-      }
-      if (content3[0] === marker || /^\s/.test(content3)) {
         return line;
       }
       return `${indent}${marker} ${content3.trimStart()}`.replace(/[ \t]*$/, "  ");
